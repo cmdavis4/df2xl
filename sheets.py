@@ -1,6 +1,7 @@
 import os
 import json
 import httplib2
+import pdb
 
 from apiclient import discovery
 from oauth2client import client, tools
@@ -46,75 +47,21 @@ def get_credentials():
         print('Storing credentials to ' + credential_path)
     return credentials
 
+def get_service():
 
-def read_test_table():
-
-    credentials = get_credentials()
-    http = credentials.authorize(httplib2.Http())
+    http = get_credentials().authorize(httplib2.Http())
     discovery_url = ('https://sheets.googleapis.com/$discovery/rest?version=v4')
     service = discovery.build('sheets', 'v4', http=http, discoveryServiceUrl=discovery_url)
+    return service
 
-    spreadsheetId = '1XkVL1KeB4wrlxJSkm6YC-tij3iehMxEWuQ8RBmpwtcs'
-    rangeName = 'Sheet1!A1:A5'
-    result = service.spreadsheets().values().get(
-        spreadsheetId=spreadsheetId, range=rangeName).execute()
-    values = result.get('values', [])
+def create_workbook(name):
 
-    if not values:
-        print('No data found.')
-    else:
-        for row in values:
-            print(row)
+    data = {'properties': {'title': name}}
+    return get_service().spreadsheets().create(body=data).execute()
 
-def edit_test_table():
-
-    credentials = get_credentials()
-    http = credentials.authorize(httplib2.Http())
-    discovery_url = ('https://sheets.googleapis.com/$discovery/rest?version=v4')
-    service = discovery.build('sheets', 'v4', http=http, discoveryServiceUrl=discovery_url)
-
-    spreadsheetId = '1XkVL1KeB4wrlxJSkm6YC-tij3iehMxEWuQ8RBmpwtcs'
-    rangeName = 'Sheet1!A1:A5'
-
-    body = json.loads({
-        'values': [[5], [4], [3], [2], [1]]
-    })
-
-    result = service.spreadsheets().values().update(
-        spreadsheetId=spreadsheetId,
-        body=body,
-        range=rangeName,
-        valueInputOption=1,
-
-    ).execute()
+def add_worksheet(workbook_id, sheet_name=None):
 
 
-def create_test_table():
-
-    credentials = get_credentials()
-    http = credentials.authorize(httplib2.Http())
-    discovery_url = ('https://sheets.googleapis.com/$discovery/rest?version=v4')
-    service = discovery.build('sheets', 'v4', http=http, discoveryServiceUrl=discovery_url)
-
-    json_request = {
-        'sheets': [
-            {
-                'properties': {
-                    'title': 'test',
-                    'tabColor': {
-                        'blue': .2,
-                        'red': 0,
-                        'green': .6,
-                        'alpha': 1
-                    }
-                }
-            }
-        ]
-    }
-    json_request = json.dumps(json_request, indent=4)
-
-    sheet = service.spreadsheets().create(body=json_request)
-    print(sheet.__dict__.keys())
 
 if __name__ == '__main__':
-    edit_test_table()
+    create_workbook('This is a dril')
