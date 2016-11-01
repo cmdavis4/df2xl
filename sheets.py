@@ -1,120 +1,37 @@
-import os
-import json
-import httplib2
+import sys
+sys.path.insert(0, '/home/vagrant/twosixcapital/gspread')
 
-from apiclient import discovery
-from oauth2client import client, tools
-from oauth2client.file import Storage
+import pandas as pd
+import numpy as np
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
+from oauth2client import tools
+import pdb
 
-
-SCOPES = 'https://www.googleapis.com/auth/spreadsheets'
-CLIENT_SECRET_FILE = 'client_secret.json'
-APPLICATION_NAME = 'Google Sheets API Python Quickstart'
-
-try:
-    import argparse
-    flags = argparse.ArgumentParser(parents=[tools.argparser]).parse_args()
-except ImportError:
-    flags = None
-
+SCOPE = 'https://spreadsheets.google.com/feeds'
 
 def get_credentials():
-    """Gets valid user credentials from storage.
+    return ServiceAccountCredentials.from_json_keyfile_name('test-spreadsheet.json', SCOPE)
 
-    If nothing has been stored, or if the stored credentials are invalid,
-    the OAuth2 flow is completed to obtain the new credentials.
+def df_to_sheets(df, spreadsheet_id, worksheet_id, column_header=True, row_header=True):
 
-    Returns:
-        Credentials, the obtained credential.
-    """
-    home_dir = os.path.expanduser('~')
-    credential_dir = os.path.join(home_dir, '.credentials')
-    if not os.path.exists(credential_dir):
-        os.makedirs(credential_dir)
-    credential_path = os.path.join(credential_dir,
-                                   'sheets.googleapis.com-python-quickstart.json')
+    gc = gspread.authorize(get_credentials())
+    wks = getattr(gc.open(spreadsheet_id), worksheet_id.lower())
 
-    store = Storage(credential_path)
-    credentials = store.get()
-    if not credentials or credentials.invalid:
-        flow = client.flow_from_clientsecrets(CLIENT_SECRET_FILE, SCOPES)
-        flow.user_agent = APPLICATION_NAME
-        if flags:
-            credentials = tools.run_flow(flow, store, flags)
-        else: # Needed only for compatibility with Python 2.6
-            credentials = tools.run(flow, store)
-        print('Storing credentials to ' + credential_path)
-    return credentials
+    to_write = [x.split('|') for x in df.to_csv(sep='|').split('\n')[:-1]]
+    max_cell = wks.get_addr_int(len(to_write), len(to_write[0]))
+    cell_range = wks.range('A1:{}'.format(max_cell))
+    cell_arr = np.array(cell_range).reshape(len(to_write), len(to_write[0]))
 
+    for row in range(len(cell_arr)):
+        for col in range(len(cell_arr[0])):
+            cell_arr[row, col].value = to_write[row][col]
 
-def read_test_table():
+    wks.update_cells(list(cell_arr.flatten()))
 
-    credentials = get_credentials()
-    http = credentials.authorize(httplib2.Http())
-    discovery_url = ('https://sheets.googleapis.com/$discovery/rest?version=v4')
-    service = discovery.build('sheets', 'v4', http=http, discoveryServiceUrl=discovery_url)
-
-    spreadsheetId = '1XkVL1KeB4wrlxJSkm6YC-tij3iehMxEWuQ8RBmpwtcs'
-    rangeName = 'Sheet1!A1:A5'
-    result = service.spreadsheets().values().get(
-        spreadsheetId=spreadsheetId, range=rangeName).execute()
-    values = result.get('values', [])
-
-    if not values:
-        print('No data found.')
-    else:
-        for row in values:
-            print(row)
-
-def edit_test_table():
-
-    credentials = get_credentials()
-    http = credentials.authorize(httplib2.Http())
-    discovery_url = ('https://sheets.googleapis.com/$discovery/rest?version=v4')
-    service = discovery.build('sheets', 'v4', http=http, discoveryServiceUrl=discovery_url)
-
-    spreadsheetId = '1XkVL1KeB4wrlxJSkm6YC-tij3iehMxEWuQ8RBmpwtcs'
-    rangeName = 'Sheet1!A1:A5'
-
-    body = json.loads({
-        'values': [[5], [4], [3], [2], [1]]
-    })
-
-    result = service.spreadsheets().values().update(
-        spreadsheetId=spreadsheetId,
-        body=body,
-        range=rangeName,
-        valueInputOption=1,
-
-    ).execute()
-
-
-def create_test_table():
-
-    credentials = get_credentials()
-    http = credentials.authorize(httplib2.Http())
-    discovery_url = ('https://sheets.googleapis.com/$discovery/rest?version=v4')
-    service = discovery.build('sheets', 'v4', http=http, discoveryServiceUrl=discovery_url)
-
-    json_request = {
-        'sheets': [
-            {
-                'properties': {
-                    'title': 'test',
-                    'tabColor': {
-                        'blue': .2,
-                        'red': 0,
-                        'green': .6,
-                        'alpha': 1
-                    }
-                }
-            }
-        ]
-    }
-    json_request = json.dumps(json_request, indent=4)
-
-    sheet = service.spreadsheets().create(body=json_request)
-    print(sheet.__dict__.keys())
 
 if __name__ == '__main__':
-    edit_test_table()
+    df = pd.DataFrame([[1,2,3], [4,5,6]], columns=['a', 'b', 'c']).set_index(['a', 'b'])
+    df.columns = [['d'], df.columns]
+
+    df_to_sheets(df, 'test', 'Sheet1')
