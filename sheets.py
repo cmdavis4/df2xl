@@ -87,80 +87,117 @@ def add_sheet(spreadsheet_id, sheet_name):
 
     return service.spreadsheets().batchUpdate(spreadsheetId=spreadsheet_id, body=data).execute()
 
-def dataframe_to_sheet(spreadsheet_id, sheet_name, df, if_exists='silent'):
+def dataframe_to_sheet(spreadsheet_id, sheet_name, df, fail_if_exists=True):
 
 
+    # Try adding a sheet to the given spreadsheet; if one already exists, either update an existing sheet or fail,
+    # depending on the fail_if_exists flag
     try:
         res = add_sheet(spreadsheet_id, sheet_name)
         sheet_id = res['spreadsheetId']
     except Exception:
-        if if_exists == 'silent':
+        if fail_if_exists:
+            raise
+        else:
+            # TODO: Need to have this clear all the data in the sheet
             sheet_id = [x['properties']['sheetId']
                         for x in service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()['sheets']
                         if x['properties']['title'] == sheet_name][0]
-        else:
-            raise
 
-    string_arr = np.array([x.split('|') for x in df.to_csv(sep='|').split('\n')[:-1]])
+    # Turn the dataframe into a string (for pasteData) and an array of strings (to get shape of headers)
+    df_string = df.to_csv(sep='|')[:-1]
+    string_arr = np.array([x.split('|') for x in df_string.split('\n')])
 
-    table_dim = np.shape(string_arr)
     data_dim = np.shape(df.values)
+    table_dim = np.shape(string_arr)
+    column_header_dim = (table_dim[0]-data_dim[0], table_dim[1])
+    row_header_dim = (table_dim[0]-column_header_dim[0], table_dim[1]-data_dim[1])
 
-    num_col_header_rows = table_dim[0] - data_dim[0]
-    num_row_header_cols = table_dim[1] - data_dim[1]
+    column_header_range = ((0, 0), (column_header_dim[0], column_header_dim[1]))
+    row_header_range = ((column_header_dim[0], 0), (table_dim[0], row_header_dim[1]))
 
-    col_header = string_arr[:num_col_header_rows]
-    row_header = string_arr[num_col_header_rows:, :num_row_header_cols]
-    data = string_arr[num_col_header_rows:, num_row_header_cols:]
 
-    if  num_col_header_rows > 0:
-        col_header_tl = 'A1'
-        col_header_br = xl_rowcol_to_cell(num_col_header_rows-1, table_dim[1]-1)  # -1 to account for 0-indexing
-        col_header_range = '{}!{}:{}'.format(sheet_name, col_header_tl, col_header_br)
-    else:
-        col_header_range = None
-    if num_row_header_cols > 0:
-        row_header_tl = xl_rowcol_to_cell(num_col_header_rows, 0)
-        row_header_br = xl_rowcol_to_cell(data_dim[0], num_row_header_cols-1)  # -1 to account for 0-indexing
-        row_header_range = '{}!{}:{}'.format(sheet_name, row_header_tl, row_header_br)
-    else:
-        row_header_range = None
-    data_tl = xl_rowcol_to_cell(num_col_header_rows, num_row_header_cols)
-    data_br = xl_rowcol_to_cell(table_dim[0]-1, table_dim[1]-1)  # -1 to account for 0-indexing
-    data_range = '{}!{}:{}'.format(sheet_name, data_tl, data_br)
-
-    column_header_request = {'updateCells': {
-        'fields': '*',
-        'range': {
-            'endRowIndex': xl_cell_to_rowcol(col_header_br)[0] + 1,  # Upper bound is exclusive
-            'startRowIndex': xl_cell_to_rowcol(col_header_tl)[0],
-            'startColumnIndex': xl_cell_to_rowcol(col_header_tl)[1],
-            'endColumnIndex': xl_cell_to_rowcol(col_header_br)[1] + 1,  # Upper bound is exclusive
-            'sheetId': sheet_id
-        },
-        'rows': [{
-            'values': [{
+    requests = []
+    if column_header_dim[0] > 0 and column_header_dim[1] > 0:
+        column_header_request = {'repeatCell': {
+            'fields': '*',
+            'range': {
+                'startRowIndex': column_header_range[0][0],
+                'startColumnIndex': column_header_range[0][1],
+                'endRowIndex': column_header_range[1][0],
+                'endColumnIndex': column_header_range[1][1],
+                'sheetId': sheet_id
+            },
+            'cell': {
                 'userEnteredFormat': {
                     'backgroundColor': {
-                        'blue': .6,
-                        'green': .3,
-                        'red': .1,
-                        'alpha': 1
+                        'blue': .33,
+                        'green': .33,
+                        'red': .33,
+                    },
+                    'horizontalAlignment': 'CENTER',
+                    'textFormat': {
+                        'foregroundColor': {
+                            'red': 1.0,
+                            'blue': 1.0,
+                            'green': 1.0
+                        },
+                        'bold': False
                     }
                 }
-            } for _ in col_header]
-        }]
-    }}
+            }
+        }}
+        requests.append(column_header_request)
 
-    requests = {'requests': [column_header_request]}
-    # pdb.set_trace()
+    if row_header_dim[0] > 0 and row_header_dim[1] > 0:
+        row_header_request = {'repeatCell': {
+            'fields': '*',
+            'range': {
+                'startRowIndex': row_header_range[0][0],
+                'startColumnIndex': row_header_range[0][1],
+                'endRowIndex': row_header_range[1][0],
+                'endColumnIndex': row_header_range[1][1],
+                'sheetId': sheet_id
+            },
+            'cell': {
+                'userEnteredFormat': {
+                    'backgroundColor': {
+                        'blue': .54,
+                        'green': .54,
+                        'red': .54,
+                    },
+                    'horizontalAlignment': 'CENTER',
+                    'textFormat': {
+                        'foregroundColor': {
+                            'red': 1.0,
+                            'blue': 1.0,
+                            'green': 1.0
+                        },
+                        'bold': False
+                    }
+                }
+            }
+        }}
+        requests.append(row_header_request)
+
+    fill_data_request = {'pasteData': {
+        'coordinate': {
+            'rowIndex': 0,
+            'columnIndex': 0,
+            'sheetId': sheet_id
+        },
+        'delimiter': '|',
+        'data': df_string
+    }}
+    requests.append(fill_data_request)
+
+    requests = {'requests': [column_header_request, row_header_request, fill_data_request]}
+
     service.spreadsheets().batchUpdate(spreadsheetId=spreadsheet_id, body=requests).execute()
 
 
 
 if __name__ == '__main__':
-    # create_spreadsheet('This is a dril')
-    df = pd.DataFrame([[1,2,3],[4,5,6]], columns=['a', 'b', 'c']).set_index(['a', 'b'])
-    dataframe_to_sheet('112yP5RKg-cLy3UAgHr3o46b-AmOvXfGtOzprOwNtNhY', 'wint', df)
-    # result = add_sheet('112yP5RKg-cLy3UAgHr3o46b-AmOvXfGtOzprOwNtNhY', 'candles')
-    # pdb.set_trace()
+    df = pd.DataFrame([[1,2,3,4],[5,6,7,8]], columns=['a', 'b', 'c', 'd']).set_index(['a', 'b'])
+    df['e'] = ['=C2*D2', '=C3*D3']
+    dataframe_to_sheet('112yP5RKg-cLy3UAgHr3o46b-AmOvXfGtOzprOwNtNhY', 'wint', df, fail_if_exists=False)
