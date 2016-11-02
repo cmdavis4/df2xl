@@ -64,7 +64,6 @@ def create_spreadsheet(title):
     data = {'properties': {'title': title}}
     return service.spreadsheets().create(body=data).execute()
 
-
 def update_sheet(spreadsheet_id, cell_range, values):
     result = service.spreadsheets().values().update(
         spreadsheetId=spreadsheet_id,
@@ -88,7 +87,6 @@ def get_sheet_id(spreadsheet_id, sheet_name):
                          if x['properties']['title'] == sheet_name][0])
     except IndexError:
         raise ValueError("Sheet '{}' does not exists in spreadsheet {}".format(sheet_name, spreadsheet_id))
-
 
 def push_dataframe_to_sheet(spreadsheet_id, sheet_name, df, execute=True, fail_if_exists=True):
     '''
@@ -210,10 +208,22 @@ def push_dataframe_to_sheet(spreadsheet_id, sheet_name, df, execute=True, fail_i
     }}
     requests.append(fill_data_request)
 
+    # Resize request
+    resize_request = {
+        'autoResizeDimensions': {
+            'dimensions': {
+                'sheetId': sheet_id,
+                'dimension': 'COLUMNS',
+                'startIndex': 0,
+                'endIndex': table_dim[1]
+            }
+        }
+    }
+    requests.append(resize_request)
+
     if execute:
         # Send it off
-        requests = {'requests': [column_header_request, row_header_request, fill_data_request]}
-        return service.spreadsheets().batchUpdate(spreadsheetId=spreadsheet_id, body=requests).execute()
+        return service.spreadsheets().batchUpdate(spreadsheetId=spreadsheet_id, body={'requests': requests}).execute()
 
     else:
         # if not execute, just return the list of requests (presumably so that they can be consolidated with requests
