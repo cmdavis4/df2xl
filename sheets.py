@@ -88,49 +88,74 @@ def get_sheet_id(spreadsheet_id, sheet_name):
     except IndexError:
         raise ValueError("Sheet '{}' does not exists in spreadsheet {}".format(sheet_name, spreadsheet_id))
 
-def push_dataframe_to_sheet(spreadsheet_id, sheet_name, df, execute=True, fail_if_exists=True):
-    '''
-    Function to push a single pandas DataFrame to a Google sheet. Note that fail_if_exists refers to the
-    existence of the sheet with the given sheet_name, and not the whole spreadsheet. This function assumes that
-    the spreadsheet into which the dataframe is to be inserted already exists. The dataframe is pushed using a
-    (up to) three part batch request; one to format the column header, one to format the row header, and one to
-    paste the data into the sheet.
-    :param spreadsheet_id: str, for now must be the actual id and not the name
-    :param sheet_name: str, name of the sheet into which the DataFrame should be inserted
-    :param df: pd.DataFrame
-    :param execute: boolean, executes the requests if True, else just returns them in a list
-    :param fail_if_exists: boolean, whether to raise an error if a sheet named sheet_name already exists in this
-    spreadsheet
-    :return: dict (the response from Google) if execute else list[dict (request)]
-    '''
-
-    # Try adding a sheet to the given spreadsheet; if one already exists, either update an existing sheet or fail,
-    # depending on the fail_if_exists flag
-    try:
-        res = add_sheet(spreadsheet_id, sheet_name)
-        sheet_id = str(res['replies'][0]['addSheet']['properties']['sheetId'])
-    except Exception:
-        if fail_if_exists:
-            raise
-        else:
-            # TODO: Need to have this clear all the data in the sheet
-            sheet_id = get_sheet_id(spreadsheet_id, sheet_name)
+def dataframe_to_requests(df, name, sheet_id, top_left=(0, 0)):
 
     # Turn the dataframe into a string (for pasteData) and an array of strings (to get shape of headers)
     df_string = df.to_csv(sep='|')[:-1]
+    df_string = '|'.join([name.upper() for _ in range(len(df_string.split('\n')[0].split('|')))]) + '\n' + df_string
     string_arr = np.array([x.split('|') for x in df_string.split('\n')])
+    # title_arr = np.array([name] * len(string_arr[0]))
+    # string_arr = np.vstack((title_arr, string_arr))
 
     # Figure out the ranges to use for the requests
     data_dim = np.shape(df.values)
     table_dim = np.shape(string_arr)
-    column_header_dim = (table_dim[0]-data_dim[0], table_dim[1])
-    row_header_dim = (table_dim[0]-column_header_dim[0], table_dim[1]-data_dim[1])
+    column_header_dim = (table_dim[0]-data_dim[0]-1, table_dim[1])
+    row_header_dim = (table_dim[0]-column_header_dim[0]-1, table_dim[1]-data_dim[1])
 
-    column_header_range = ((0, 0), (column_header_dim[0], column_header_dim[1]))
-    row_header_range = ((column_header_dim[0], 0), (table_dim[0], row_header_dim[1]))
+    title_range = ((top_left[0], top_left[1]),
+                   (top_left[0]+1, top_left[1]+table_dim[1]))
 
+    # +1's are to offset the title row
+    column_header_range = ((top_left[0]+1, top_left[1]),
+                           (top_left[0] + column_header_dim[0] + 1, top_left[1] + column_header_dim[1]))
+    row_header_range = ((top_left[0] + column_header_dim[0] + 1, top_left[1]),
+                        (top_left[0] + table_dim[0], top_left[1] + row_header_dim[1]))
+    table_range = ((top_left[0], top_left[1]),
+                   (top_left[0]+table_dim[0], top_left[1]+table_dim[1]))
 
     requests = []
+
+    # Title request
+    title_merge_request = {'mergeCells': {
+        'range': {
+            'startRowIndex': title_range[0][0],
+            'startColumnIndex': title_range[0][1],
+            'endRowIndex': title_range[1][0],
+            'endColumnIndex': title_range[1][1],
+            'sheetId': sheet_id
+        },
+        'mergeType': 'MERGE_ALL'
+    }}
+    title_format_request = {'repeatCell': {
+            'fields': '*',
+            'range': {
+                'startRowIndex': title_range[0][0],
+                'startColumnIndex': title_range[0][1],
+                'endRowIndex': title_range[1][0],
+                'endColumnIndex': title_range[1][1],
+                'sheetId': sheet_id
+            },
+            'cell': {
+                'userEnteredFormat': {
+                    'backgroundColor': {
+                        'blue': .22,
+                        'green': .2,
+                        'red': .22,
+                    },
+                    'horizontalAlignment': 'CENTER',
+                    'textFormat': {
+                        'foregroundColor': {
+                            'red': 1.0,
+                            'blue': 1.0,
+                            'green': 1.0
+                        },
+                        'bold': True
+                    }
+                }
+            }
+        }}
+    # These need to be in a specific order relative to the others, so we add them on just before executing
 
     # Column header request
     if column_header_dim[0] > 0 and column_header_dim[1] > 0:
@@ -194,13 +219,14 @@ def push_dataframe_to_sheet(spreadsheet_id, sheet_name, df, execute=True, fail_i
                 }
             }
         }}
+
         requests.append(row_header_request)
 
     # Data paste request
     fill_data_request = {'pasteData': {
         'coordinate': {
-            'rowIndex': 0,
-            'columnIndex': 0,
+            'rowIndex': top_left[0],
+            'columnIndex': top_left[1],
             'sheetId': sheet_id
         },
         'delimiter': '|',
@@ -221,15 +247,27 @@ def push_dataframe_to_sheet(spreadsheet_id, sheet_name, df, execute=True, fail_i
     }
     requests.append(resize_request)
 
-    if execute:
-        # Send it off
-        return service.spreadsheets().batchUpdate(spreadsheetId=spreadsheet_id, body={'requests': requests}).execute()
+    # Named range request
+    named_range_request = {
+        'addNamedRange': {
+            'namedRange': {
+                'range': {
+                    'startRowIndex': table_range[0][0],
+                    'startColumnIndex': table_range[0][1],
+                    'endRowIndex': table_range[1][0],
+                    'endColumnIndex': table_range[1][1],
+                    'sheetId': sheet_id
+                },
+                'name': name.replace(' ', '_')
+            }
+        }
+    }
+    requests.append(named_range_request)
 
-    else:
-        # if not execute, just return the list of requests (presumably so that they can be consolidated with requests
-        # from other calls to this function)
-        return requests
+    requests = [title_format_request] + requests + [title_merge_request]
 
+    br = (top_left[0] + table_dim[0] - 1, top_left[1] + table_dim[1] - 1)
+    return (br, requests)
 
 def push_analysis_to_sheets(df_list, title=None, spreadsheet_id=None, execute=True):
     '''
@@ -263,7 +301,42 @@ def push_analysis_to_sheets(df_list, title=None, spreadsheet_id=None, execute=Tr
     else:
         return requests
 
+def create_analysis_workbook(df_list, title=None, spreadsheet_id=None, execute=True):
+    '''
+    Function to push multiple DataFrames into the same Google spreadsheet.
+    :param df_list: list[(str, pd.DataFrame)], where str is the title of the sheet and pd.DataFrame is the content
+    :param title: str, the name of the spreadsheet to create. ONLY INCLUDE THIS if you want to create a new
+    spreadsheet. If both title and spreadsheet_id are passed, spreadsheet_id will be ignored, and a new spreadsheet
+    will be created.
+    :param spreadsheet_id: str, the id of the spreadsheet into which this data should be pushed
+    :param execute: boolean, executes the requests if True, else just returns a list of requests
+    :return: dict (the response from Google) if execute else list[dict (request)]
+    '''
 
+    if title:
+        res = create_spreadsheet(title)
+        spreadsheet_id = str(res['spreadsheetId'])
+
+    sheet_id = add_sheet(spreadsheet_id, 'Outputs')['replies'][0]['addSheet']['properties']['sheetId']
+
+    requests = []
+    prev_br=(-2,0)
+
+    for (name, df) in df_list:
+        (prev_br, r) = dataframe_to_requests(df, name, sheet_id, (prev_br[0] + 2, 0))
+        requests += r
+
+    # If creating a new workbook, delete 'Sheet1'
+    if title:
+        delete_request = {'deleteSheet': {'sheetId': get_sheet_id(spreadsheet_id, 'Sheet1')}}
+        requests.append(delete_request)
+
+    if execute:
+        requests = {'requests': requests}
+        return service.spreadsheets().batchUpdate(spreadsheetId=spreadsheet_id, body=requests).execute()
+
+    else:
+        return requests
 
 if __name__ == '__main__':
     df1 = pd.DataFrame([[1,2,3,4], [6,7,8,9]], columns=['a', 'b', 'c', 'd']).set_index(['a', 'b'])
@@ -274,4 +347,4 @@ if __name__ == '__main__':
     df3 = df3[['expense category', 'expense amount']]
     df4 = pd.DataFrame({'proposal': ['spend less on candles'], 'response': ['no']})
     l = [('someone who is good at the economy', df3), ('please help me budget this', df1), ('my family is dying', df4)]
-    res = push_analysis_to_sheets(l, title='spend less on candles')
+    res = create_analysis_workbook(l, title='spend less on candles')
