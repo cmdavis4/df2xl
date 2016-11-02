@@ -83,10 +83,18 @@ def get_sheet_id(spreadsheet_id, sheet_name):
 
     try:
         return str([x['properties']['sheetId']
-                         for x in service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()['sheets']
+                         for x in get_sheet_by_name(spreadsheet_id, sheet_name)['sheets']
                          if x['properties']['title'] == sheet_name][0])
     except IndexError:
         raise ValueError("Sheet '{}' does not exists in spreadsheet {}".format(sheet_name, spreadsheet_id))
+
+def get_sheet_by_name(spreadsheet_id, sheet_name):
+
+    try:
+        return service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
+    except IndexError:
+        raise ValueError("Sheet '{}' does not exists in spreadsheet {}".format(sheet_name, spreadsheet_id))
+
 
 def dataframe_to_requests(df, name, sheet_id, top_left=(0, 0)):
 
@@ -139,9 +147,9 @@ def dataframe_to_requests(df, name, sheet_id, top_left=(0, 0)):
             'cell': {
                 'userEnteredFormat': {
                     'backgroundColor': {
-                        'blue': .22,
-                        'green': .2,
-                        'red': .22,
+                        'blue': .66,
+                        'green': .46,
+                        'red': 0,
                     },
                     'horizontalAlignment': 'CENTER',
                     'textFormat': {
@@ -171,8 +179,8 @@ def dataframe_to_requests(df, name, sheet_id, top_left=(0, 0)):
             'cell': {
                 'userEnteredFormat': {
                     'backgroundColor': {
-                        'blue': .33,
-                        'green': .33,
+                        'blue': .84,
+                        'green': .59,
                         'red': .33,
                     },
                     'horizontalAlignment': 'CENTER',
@@ -203,9 +211,9 @@ def dataframe_to_requests(df, name, sheet_id, top_left=(0, 0)):
             'cell': {
                 'userEnteredFormat': {
                     'backgroundColor': {
-                        'blue': .54,
-                        'green': .54,
-                        'red': .54,
+                        'blue': 1.,
+                        'green': .69,
+                        'red': .33,
                     },
                     'horizontalAlignment': 'CENTER',
                     'textFormat': {
@@ -301,7 +309,7 @@ def push_analysis_to_sheets(df_list, title=None, spreadsheet_id=None, execute=Tr
     else:
         return requests
 
-def create_analysis_workbook(df_list, title=None, spreadsheet_id=None, execute=True):
+def create_analysis_workbook(df_list, title=None, spreadsheet_id=None, execute=True, overwrite=True):
     '''
     Function to push multiple DataFrames into the same Google spreadsheet.
     :param df_list: list[(str, pd.DataFrame)], where str is the title of the sheet and pd.DataFrame is the content
@@ -313,20 +321,43 @@ def create_analysis_workbook(df_list, title=None, spreadsheet_id=None, execute=T
     :return: dict (the response from Google) if execute else list[dict (request)]
     '''
 
+
     if title:
         res = create_spreadsheet(title)
         spreadsheet_id = str(res['spreadsheetId'])
 
-    sheet_id = add_sheet(spreadsheet_id, 'Outputs')['replies'][0]['addSheet']['properties']['sheetId']
-
     requests = []
+
+    try:
+        sheet_id = add_sheet(spreadsheet_id, 'Outputs')['replies'][0]['addSheet']['properties']['sheetId']
+    except Exception:
+        if __name__ == '__main__':
+            if not overwrite:
+                raise
+            else:
+                # If sheet already exists, clear it
+                sheet_id = get_sheet_id(spreadsheet_id, 'Outputs')
+                requests.append({'updateCells': {
+                        'range': {
+                            'sheetId': sheet_id
+                        },
+                        'fields': '*'
+                    }
+                })
+                # Gotta delete the named ranges
+                nr_ids = [x['namedRangeId'] for x in get_sheet_by_name(spreadsheet_id, 'Outputs')['namedRanges']]
+                for x in nr_ids:
+                    requests.append({'deleteNamedRange': {'namedRangeId': x}})
+
+
     prev_br=(-2,0)
 
     for (name, df) in df_list:
         (prev_br, r) = dataframe_to_requests(df, name, sheet_id, (prev_br[0] + 2, 0))
         requests += r
 
-    # If creating a new workbook, delete 'Sheet1'
+    # If creating a new workbook, delete 'Sheet1'; we do this as part of the batch request and not on its own
+    # because I'm not sure what would happen if you tried to delete the only sheet in a workbook.
     if title:
         delete_request = {'deleteSheet': {'sheetId': get_sheet_id(spreadsheet_id, 'Sheet1')}}
         requests.append(delete_request)
@@ -339,7 +370,7 @@ def create_analysis_workbook(df_list, title=None, spreadsheet_id=None, execute=T
         return requests
 
 if __name__ == '__main__':
-    df1 = pd.DataFrame([[1,2,3,4], [6,7,8,9]], columns=['a', 'b', 'c', 'd']).set_index(['a', 'b'])
+    df1 = pd.DataFrame([[1,2,10000,4], [6,7,8,9]], columns=['a', 'b', 'c', 'd']).set_index(['a', 'b'])
     df3 = pd.DataFrame({
         'expense category': ['Food', 'Data', 'Rent', 'Candles', 'Utility'],
         'expense amount': ['$200', '$150', '$800', '$3,600', '$150']
@@ -347,4 +378,4 @@ if __name__ == '__main__':
     df3 = df3[['expense category', 'expense amount']]
     df4 = pd.DataFrame({'proposal': ['spend less on candles'], 'response': ['no']})
     l = [('someone who is good at the economy', df3), ('please help me budget this', df1), ('my family is dying', df4)]
-    res = create_analysis_workbook(l, title='spend less on candles')
+    res = create_analysis_workbook(l, spreadsheet_id='1V6CJ7wcyuESwfR8w4T7SbltE9H3TYcGEY_9apW1ebCM')
