@@ -15,6 +15,8 @@ SCOPES = 'https://www.googleapis.com/auth/spreadsheets'
 CLIENT_SECRET_FILE = 'client_secret.json'
 APPLICATION_NAME = 'Google Sheets API Python Quickstart'
 
+CHART_METRICS = ['ARPU',]
+
 ##############################
 # 'SPREADSHEET' -> WORKBOOK
 # 'SHEET'-> SINGLE TAB OF WORKBOOK
@@ -96,7 +98,7 @@ def get_sheet_by_name(spreadsheet_id, sheet_name):
         raise ValueError("Sheet '{}' does not exists in spreadsheet {}".format(sheet_name, spreadsheet_id))
 
 
-def dataframe_to_requests(df, name, sheet_id, top_left=(0, 0)):
+def dataframe_to_requests(df, name, sheet_id, top_left=(0, 0), allow_chart=True):
 
     # Turn the dataframe into a string (for pasteData) and an array of strings (to get shape of headers)
     df_string = df.to_csv(sep='|')[:-1]
@@ -121,6 +123,8 @@ def dataframe_to_requests(df, name, sheet_id, top_left=(0, 0)):
                         (top_left[0] + table_dim[0], top_left[1] + row_header_dim[1]))
     table_range = ((top_left[0], top_left[1]),
                    (top_left[0]+table_dim[0], top_left[1]+table_dim[1]))
+    data_range = ((column_header_range[1][0], row_header_range[1][1]),
+                 (table_range[1][0], table_range[1][1]))
 
     requests = []
 
@@ -272,6 +276,111 @@ def dataframe_to_requests(df, name, sheet_id, top_left=(0, 0)):
     }
     requests.append(named_range_request)
 
+    # Chart request
+    if ' triangle ' in name.lower():
+
+        adds = np.diag(df)
+
+
+        chart_request = {
+                  "addChart": {
+                    "chart": {
+                      "spec": {
+                        "title": "Model Q1 Sales",
+                        "basicChart": {
+                          "chartType": "LINE",
+                          "legendPosition": "BOTTOM_LEGEND",
+                          "axis": [
+                            {
+                              "position": "BOTTOM_AXIS",
+                              "title": "Model Numbers"
+                            },
+                            {
+                              "position": "LEFT_AXIS",
+                              "title": "Sales"
+                            }
+                          ],
+                          "domains": [
+                            {
+                              "domain": {
+                                "sourceRange": {
+                                  "sources": [
+                                    {
+                                      "sheetId": sheet_id,
+                                      "startRowIndex": row_header_range[0][0],
+                                      "endRowIndex": row_header_range[1][0],
+                                      "startColumnIndex": row_header_range[0][1],
+                                      "endColumnIndex": row_header_range[1][1]
+                                    }
+                                  ]
+                                }
+                              }
+                            }
+                          ],
+                          "series": [
+                            {
+                              "series": {
+                                "sourceRange": {
+                                  "sources": [
+                                    {
+                                      "sheetId": sheet_id,
+                                      "startRowIndex": 0,
+                                      "endRowIndex": 7,
+                                      "startColumnIndex": 1,
+                                      "endColumnIndex": 2
+                                    }
+                                  ]
+                                }
+                              },
+                              "targetAxis": "LEFT_AXIS"
+                            },
+                            {
+                              "series": {
+                                "sourceRange": {
+                                  "sources": [
+                                    {
+                                      "sheetId": sourceSheetId,
+                                      "startRowIndex": 0,
+                                      "endRowIndex": 7,
+                                      "startColumnIndex": 2,
+                                      "endColumnIndex": 3
+                                    }
+                                  ]
+                                }
+                              },
+                              "targetAxis": "LEFT_AXIS"
+                            },
+                            {
+                              "series": {
+                                "sourceRange": {
+                                  "sources": [
+                                    {
+                                      "sheetId": sourceSheetId,
+                                      "startRowIndex": 0,
+                                      "endRowIndex": 7,
+                                      "startColumnIndex": 3,
+                                      "endColumnIndex": 4
+                                    }
+                                  ]
+                                }
+                              },
+                              "targetAxis": "LEFT_AXIS"
+                            }
+                          ],
+                          "headerCount": 1
+                        }
+                      },
+                      "position": {
+                        "newSheet": true
+                      }
+                    }
+                  }
+                }
+
+
+    if allow_chart and any([' {} '.format(x) in name for x in CHART_METRICS]):
+
+
     requests = [title_format_request] + requests + [title_merge_request]
 
     br = (top_left[0] + table_dim[0] - 1, top_left[1] + table_dim[1] - 1)
@@ -309,10 +418,11 @@ def push_analysis_to_sheets(df_list, title=None, spreadsheet_id=None, execute=Tr
     else:
         return requests
 
-def create_analysis_workbook(df_list, title=None, spreadsheet_id=None, execute=True, overwrite=True):
+def create_analysis_workbook(df_list, title=None, allow_charts=True, spreadsheet_id=None, execute=True, overwrite=True):
     '''
     Function to push multiple DataFrames into the same Google spreadsheet.
-    :param df_list: list[(str, pd.DataFrame)], where str is the title of the sheet and pd.DataFrame is the content
+    :param df_list: list[(str, pd.DataFrame, dict)],where str is the title of the sheet and pd.DataFrame is the
+    content. The dict is a list of flags specifying charts to be created, extra tables to create, etc.
     :param title: str, the name of the spreadsheet to create. ONLY INCLUDE THIS if you want to create a new
     spreadsheet. If both title and spreadsheet_id are passed, spreadsheet_id will be ignored, and a new spreadsheet
     will be created.
@@ -353,7 +463,7 @@ def create_analysis_workbook(df_list, title=None, spreadsheet_id=None, execute=T
     prev_br=(-2,0)
 
     for (name, df) in df_list:
-        (prev_br, r) = dataframe_to_requests(df, name, sheet_id, (prev_br[0] + 2, 0))
+        (prev_br, r) = dataframe_to_requests(df, name, sheet_id, (prev_br[0] + 2, 0), allow_chart=allow_charts)
         requests += r
 
     # If creating a new workbook, delete 'Sheet1'; we do this as part of the batch request and not on its own
