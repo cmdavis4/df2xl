@@ -98,7 +98,7 @@ def get_sheet_by_name(spreadsheet_id, sheet_name):
         raise ValueError("Sheet '{}' does not exists in spreadsheet {}".format(sheet_name, spreadsheet_id))
 
 
-def dataframe_to_requests(df, name, sheet_id, top_left=(0, 0), allow_chart=True):
+def dataframe_to_requests(df, name, sheet_id, top_left=(0, 0)):
 
     # Turn the dataframe into a string (for pasteData) and an array of strings (to get shape of headers)
     df_string = df.to_csv(sep='|')[:-1]
@@ -231,7 +231,6 @@ def dataframe_to_requests(df, name, sheet_id, top_left=(0, 0), allow_chart=True)
                 }
             }
         }}
-
         requests.append(row_header_request)
 
     # Data paste request
@@ -276,149 +275,95 @@ def dataframe_to_requests(df, name, sheet_id, top_left=(0, 0), allow_chart=True)
     }
     requests.append(named_range_request)
 
-    # Chart request
-    if ' triangle ' in name.lower():
-
-        adds = np.diag(df)
-
-
-        chart_request = {
-                  "addChart": {
-                    "chart": {
-                      "spec": {
-                        "title": "Model Q1 Sales",
-                        "basicChart": {
-                          "chartType": "LINE",
-                          "legendPosition": "BOTTOM_LEGEND",
-                          "axis": [
-                            {
-                              "position": "BOTTOM_AXIS",
-                              "title": "Model Numbers"
-                            },
-                            {
-                              "position": "LEFT_AXIS",
-                              "title": "Sales"
-                            }
-                          ],
-                          "domains": [
-                            {
-                              "domain": {
-                                "sourceRange": {
-                                  "sources": [
-                                    {
-                                      "sheetId": sheet_id,
-                                      "startRowIndex": row_header_range[0][0],
-                                      "endRowIndex": row_header_range[1][0],
-                                      "startColumnIndex": row_header_range[0][1],
-                                      "endColumnIndex": row_header_range[1][1]
-                                    }
-                                  ]
-                                }
-                              }
-                            }
-                          ],
-                          "series": [
-                            {
-                              "series": {
-                                "sourceRange": {
-                                  "sources": [
-                                    {
-                                      "sheetId": sheet_id,
-                                      "startRowIndex": 0,
-                                      "endRowIndex": 7,
-                                      "startColumnIndex": 1,
-                                      "endColumnIndex": 2
-                                    }
-                                  ]
-                                }
-                              },
-                              "targetAxis": "LEFT_AXIS"
-                            },
-                            {
-                              "series": {
-                                "sourceRange": {
-                                  "sources": [
-                                    {
-                                      "sheetId": sourceSheetId,
-                                      "startRowIndex": 0,
-                                      "endRowIndex": 7,
-                                      "startColumnIndex": 2,
-                                      "endColumnIndex": 3
-                                    }
-                                  ]
-                                }
-                              },
-                              "targetAxis": "LEFT_AXIS"
-                            },
-                            {
-                              "series": {
-                                "sourceRange": {
-                                  "sources": [
-                                    {
-                                      "sheetId": sourceSheetId,
-                                      "startRowIndex": 0,
-                                      "endRowIndex": 7,
-                                      "startColumnIndex": 3,
-                                      "endColumnIndex": 4
-                                    }
-                                  ]
-                                }
-                              },
-                              "targetAxis": "LEFT_AXIS"
-                            }
-                          ],
-                          "headerCount": 1
-                        }
-                      },
-                      "position": {
-                        "newSheet": true
-                      }
-                    }
-                  }
-                }
-
-
-    if allow_chart and any([' {} '.format(x) in name for x in CHART_METRICS]):
-
-
     requests = [title_format_request] + requests + [title_merge_request]
 
-    br = (top_left[0] + table_dim[0] - 1, top_left[1] + table_dim[1] - 1)
-    return (br, requests)
+    return (data_range, requests)
 
-def push_analysis_to_sheets(df_list, title=None, spreadsheet_id=None, execute=True):
-    '''
-    Function to push multiple DataFrames into the same Google spreadsheet.
-    :param df_list: list[(str, pd.DataFrame)], where str is the title of the sheet and pd.DataFrame is the content
-    :param title: str, the name of the spreadsheet to create. ONLY INCLUDE THIS if you want to create a new
-    spreadsheet. If both title and spreadsheet_id are passed, spreadsheet_id will be ignored, and a new spreadsheet
-    will be created.
-    :param spreadsheet_id: str, the id of the spreadsheet into which this data should be pushed
-    :param execute: boolean, executes the requests if True, else just returns a list of requests
-    :return: dict (the response from Google) if execute else list[dict (request)]
-    '''
 
-    if title:
-        res = create_spreadsheet(title)
-        spreadsheet_id = str(res['spreadsheetId'])
+def add_chart(sheet_id, table_range, title, type='growth', top_left=None):
 
-    requests = []
-    for (name, df) in df_list:
-        requests += push_dataframe_to_sheet(spreadsheet_id, name, df, fail_if_exists=True, execute=False)
+    implemented_types = ['growth']
 
-    # If creating a new workbook, delete 'Sheet1'
-    if title:
-        delete_request = {'deleteSheet': {'sheetId': get_sheet_id(spreadsheet_id, 'Sheet1')}}
-        requests.append(delete_request)
+    if type not in implemented_types:
+        raise NotImplementedError('Acceptable type arguments are {}'.format(implemented_types))
 
-    if execute:
-        requests = {'requests': requests}
-        return service.spreadsheets().batchUpdate(spreadsheetId=spreadsheet_id, body=requests).execute()
+    top_left = top_left if top_left is not None else (table_range[0][0], table_range[1][1]+1)
 
-    else:
-        return requests
+    if type == 'growth':
 
-def create_analysis_workbook(df_list, title=None, allow_charts=True, spreadsheet_id=None, execute=True, overwrite=True):
+        request = {
+          "addChart": {
+            "chart": {
+              "position": {
+                "overlayPosition": {
+                  "anchorCell": {
+                    "rowIndex": top_left[0],
+                    "columnIndex": top_left[1],
+                    "sheetId": sheet_id
+                  }
+                }
+              },
+              "spec": {
+                "title": title,
+                "basicChart": {
+                  "chartType": "LINE",
+                  "legendPosition": "BOTTOM_LEGEND",
+                  "axis": [
+                    {
+                      "position": "BOTTOM_AXIS",
+                      "title": "Date"
+                    },
+                    {
+                      "position": "LEFT_AXIS",
+                      "title": "New Adds"
+                    }
+                  ],
+                  "domains": [
+                    {
+                      "domain": {
+                        "sourceRange": {
+                          "sources": [
+                            {
+                              "sheetId": sheet_id,
+                              "startRowIndex": table_range[0][0]+2,
+                              "endRowIndex": table_range[1][0]+1,
+                              "startColumnIndex": table_range[0][1],
+                              "endColumnIndex": table_range[0][1]+1
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  ],
+                  "series": [
+                    {
+                      "series": {
+                        "sourceRange": {
+                          "sources": [
+                            {
+                              "sheetId": sheet_id,
+                              "startRowIndex": table_range[0][0]+2,
+                              "endRowIndex": table_range[1][0]+1,
+                              "startColumnIndex": table_range[0][1]+1,
+                              "endColumnIndex": table_range[1][1]
+                            }
+                          ]
+                        }
+                      },
+                      "targetAxis": "LEFT_AXIS"
+                    }
+                  ],
+                  "headerCount": 1
+                }
+              }
+            }
+          }
+        }
+
+    return request
+
+
+def create_analysis_workbook(df_list, title=None, spreadsheet_id=None, execute=True, overwrite=True):
     '''
     Function to push multiple DataFrames into the same Google spreadsheet.
     :param df_list: list[(str, pd.DataFrame, dict)],where str is the title of the sheet and pd.DataFrame is the
@@ -431,7 +376,6 @@ def create_analysis_workbook(df_list, title=None, allow_charts=True, spreadsheet
     :return: dict (the response from Google) if execute else list[dict (request)]
     '''
 
-
     if title:
         res = create_spreadsheet(title)
         spreadsheet_id = str(res['spreadsheetId'])
@@ -441,30 +385,71 @@ def create_analysis_workbook(df_list, title=None, allow_charts=True, spreadsheet
     try:
         sheet_id = add_sheet(spreadsheet_id, 'Outputs')['replies'][0]['addSheet']['properties']['sheetId']
     except Exception:
-        if __name__ == '__main__':
-            if not overwrite:
-                raise
-            else:
-                # If sheet already exists, clear it
-                sheet_id = get_sheet_id(spreadsheet_id, 'Outputs')
-                requests.append({'updateCells': {
-                        'range': {
-                            'sheetId': sheet_id
-                        },
-                        'fields': '*'
-                    }
-                })
-                # Gotta delete the named ranges
+        if not overwrite:
+            raise
+        else:
+            # If sheet already exists, clear it
+            sheet_id = get_sheet_id(spreadsheet_id, 'Outputs')
+            requests.append({'updateCells': {
+                    'range': {
+                        'sheetId': sheet_id
+                    },
+                    'fields': '*'
+                }
+            })
+
+            # Delete named ranges
+            try:
                 nr_ids = [x['namedRangeId'] for x in get_sheet_by_name(spreadsheet_id, 'Outputs')['namedRanges']]
                 for x in nr_ids:
                     requests.append({'deleteNamedRange': {'namedRangeId': x}})
+            except KeyError:  # If no named ranges
+                pass
 
+            # Delete Charts
+            try:
+                chart_ids = [x['chartId'] for x in get_sheet_by_name(spreadsheet_id, 'Outputs')['sheets'][0]['charts']]
+                for x in chart_ids:
+                    requests.append({'deleteEmbeddedObject': {'objectId': x}})
+            except KeyError:  # If no charts
+                pass
 
-    prev_br=(-2,0)
+            # Unmerge merged cells
+            unmerge_request = {'unmergeCells': {
+                'range': {
+                    'sheetId': sheet_id
+                }
+            }}
+            requests.append(unmerge_request)
 
-    for (name, df) in df_list:
-        (prev_br, r) = dataframe_to_requests(df, name, sheet_id, (prev_br[0] + 2, 0), allow_chart=allow_charts)
+    top_left=(0,0)
+    for t in df_list:
+        name, df = t[0], t[1]
+        try:
+            d = t[2]
+        except IndexError:
+            d = {}
+        dr, r = dataframe_to_requests(df, name, sheet_id, top_left)
         requests += r
+
+        if d.get('triangle', False) and d.get('growth', False):
+            diagonals = np.diag(df)
+            x_labels = df.index[:len(diagonals)]
+            s = pd.Series(diagonals, index=x_labels)
+            diagonals_df = pd.DataFrame(s, columns=['New adds'])
+            diag_dr, diag_r = dataframe_to_requests(diagonals_df, name + ' new adds', sheet_id,
+                                                    top_left=(top_left[0], dr[1][1]+1))
+            requests += diag_r
+
+            chart_tr = ((top_left[0], dr[1][1]+1), (diag_dr[1][0], diag_dr[1][1]))  # chart table (data source) range
+            if d.get('chart', False):
+                requests.append(add_chart(sheet_id, chart_tr, 'New adds'))
+                top_left = (max(dr[0][0]+17, diag_dr[1][0]+2, dr[1][0]+2), 0)  # 17 is arbitrary, pls change if needed
+            else:
+                top_left = (max(dr[1][0], diag_dr[1][0])+2, 0)
+        else:
+            top_left = (dr[1][0]+2, 0)
+
 
     # If creating a new workbook, delete 'Sheet1'; we do this as part of the batch request and not on its own
     # because I'm not sure what would happen if you tried to delete the only sheet in a workbook.
@@ -473,11 +458,10 @@ def create_analysis_workbook(df_list, title=None, allow_charts=True, spreadsheet
         requests.append(delete_request)
 
     if execute:
-        requests = {'requests': requests}
-        return service.spreadsheets().batchUpdate(spreadsheetId=spreadsheet_id, body=requests).execute()
-
+        return service.spreadsheets().batchUpdate(spreadsheetId=spreadsheet_id, body={'requests': requests}).execute()
     else:
         return requests
+
 
 if __name__ == '__main__':
     df1 = pd.DataFrame([[1,2,10000,4], [6,7,8,9]], columns=['a', 'b', 'c', 'd']).set_index(['a', 'b'])
@@ -487,5 +471,22 @@ if __name__ == '__main__':
     })
     df3 = df3[['expense category', 'expense amount']]
     df4 = pd.DataFrame({'proposal': ['spend less on candles'], 'response': ['no']})
-    l = [('someone who is good at the economy', df3), ('please help me budget this', df1), ('my family is dying', df4)]
+    df5 = pd.DataFrame.from_dict({
+        'a': [5, 4, 3, 2, 1],
+        'b': [np.nan, 6, 3, 2, 1],
+        'c': [np.nan, np.nan, 7, 4, 1],
+        'd': [np.nan, np.nan, np.nan, 8, 1],
+        'e': [np.nan, np.nan, np.nan, np.nan, 9]
+    }, orient='index')
+    df5 = df5.loc[['a', 'b', 'c', 'd', 'e']]
+    df5.columns = pd.date_range('2010-01-01', freq='AS', periods=5)
+    df5.index = pd.date_range('2010-01-01', freq='AS', periods=5)
+    df6 = pd.DataFrame([1,2,3],[4,5,6])
+    l = [
+        ('someone who is good at the economy', df3),
+        ('please help me budget this', df1),
+        ('my family is dying', df4),
+        ('real data', df5, {'triangle': True, 'growth': True, 'chart': True}),
+        ('blah', df6)
+    ]
     res = create_analysis_workbook(l, spreadsheet_id='1V6CJ7wcyuESwfR8w4T7SbltE9H3TYcGEY_9apW1ebCM')
