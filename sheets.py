@@ -15,7 +15,11 @@ SCOPES = 'https://www.googleapis.com/auth/spreadsheets'
 CLIENT_SECRET_FILE = 'client_secret.json'
 APPLICATION_NAME = 'Google Sheets API Python Quickstart'
 
-CHART_METRICS = ['ARPU',]
+# Cell background colors
+TITLE_COLOR = {'blue': .66, 'green': .46, 'red': 0}
+ROW_HEADER_COLOR = {'blue': 1., 'green': .69, 'red': .33}
+COLUMN_HEADER_COLOR = {'blue': .84, 'green': .59, 'red': .33}
+BORDER_STYLE = {'style': 'DASHED', 'width': 1, 'color': ROW_HEADER_COLOR}
 
 ##############################
 # 'SPREADSHEET' -> WORKBOOK
@@ -97,7 +101,6 @@ def get_sheet_by_name(spreadsheet_id, sheet_name):
     except IndexError:
         raise ValueError("Sheet '{}' does not exists in spreadsheet {}".format(sheet_name, spreadsheet_id))
 
-
 def dataframe_to_requests(df, name, sheet_id, top_left=(0, 0)):
 
     # Turn the dataframe into a string (for pasteData) and an array of strings (to get shape of headers)
@@ -150,11 +153,7 @@ def dataframe_to_requests(df, name, sheet_id, top_left=(0, 0)):
             },
             'cell': {
                 'userEnteredFormat': {
-                    'backgroundColor': {
-                        'blue': .66,
-                        'green': .46,
-                        'red': 0,
-                    },
+                    'backgroundColor': TITLE_COLOR,
                     'horizontalAlignment': 'CENTER',
                     'textFormat': {
                         'foregroundColor': {
@@ -182,11 +181,7 @@ def dataframe_to_requests(df, name, sheet_id, top_left=(0, 0)):
             },
             'cell': {
                 'userEnteredFormat': {
-                    'backgroundColor': {
-                        'blue': .84,
-                        'green': .59,
-                        'red': .33,
-                    },
+                    'backgroundColor': COLUMN_HEADER_COLOR,
                     'horizontalAlignment': 'CENTER',
                     'textFormat': {
                         'foregroundColor': {
@@ -214,11 +209,7 @@ def dataframe_to_requests(df, name, sheet_id, top_left=(0, 0)):
             },
             'cell': {
                 'userEnteredFormat': {
-                    'backgroundColor': {
-                        'blue': 1.,
-                        'green': .69,
-                        'red': .33,
-                    },
+                    'backgroundColor': ROW_HEADER_COLOR,
                     'horizontalAlignment': 'CENTER',
                     'textFormat': {
                         'foregroundColor': {
@@ -278,7 +269,6 @@ def dataframe_to_requests(df, name, sheet_id, top_left=(0, 0)):
     requests = [title_format_request] + requests + [title_merge_request]
 
     return (data_range, requests)
-
 
 def add_chart(sheet_id, table_range, title, type='growth', top_left=None):
 
@@ -362,7 +352,6 @@ def add_chart(sheet_id, table_range, title, type='growth', top_left=None):
 
     return request
 
-
 def create_analysis_workbook(df_list, title=None, spreadsheet_id=None, execute=True, overwrite=True):
     '''
     Function to push multiple DataFrames into the same Google spreadsheet.
@@ -424,6 +413,20 @@ def create_analysis_workbook(df_list, title=None, spreadsheet_id=None, execute=T
 
     top_left=(0,0)
     for t in df_list:
+
+        # Border request
+        if top_left[0] > 0:
+            requests.append({
+                'updateBorders': {
+                    'range': {
+                        'sheetId': sheet_id,
+                        'startRowIndex': top_left[0]-1,
+                        'endRowIndex': top_left[0]
+                    },
+                    'top': BORDER_STYLE
+                }
+            })
+
         name, df = t[0], t[1]
         try:
             d = t[2]
